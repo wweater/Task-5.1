@@ -1,4 +1,5 @@
 import { Instructor } from '../models/Instructor.js';
+import Joi from 'joi';
 
 // =============================================================================
 //  INSTRUCTOR PORTAL CONTROLLER  —  ⚠️ INTENTIONALLY VULNERABLE (security lab)
@@ -30,20 +31,22 @@ function publicProfile(doc) {
 }
 
 // POST /api/instructors/login
+const loginSchema = Joi.object({
+  username: Joi.string().required(),
+  password: Joi.string().required()
+});
+
 export async function loginInstructor(req, res, next) {
   try {
-    const { username, password } = req.body;
-    if (username === undefined || password === undefined) {
-      return res.status(400).json({ message: 'username and password are required' });
+    const { value, error } = loginSchema.validate(req.body);
+    if (error) {
+      return res.status(400).json({ message: error.message });
     }
 
-    // ⚠️ VULNERABLE (NoSQL injection): `username` and `password` are placed
-    // directly into the query. Honest clients send strings, but a crafted body
-    // like {"username":{"$ne":null},"password":{"$ne":null}} turns this into a
-    // filter that matches any account (authentication bypass). With
-    // {"password":{"$regex":"^S"}} the success/failure response becomes an
-    // oracle for extracting the stored password one character at a time.
-    const instructor = await Instructor.findOne({ username, password });
+    const instructor = await Instructor.findOne({
+      username: value.username,
+      password: value.password
+    });
 
     if (!instructor) {
       return res.status(401).json({ message: 'Invalid credentials' });
@@ -53,10 +56,7 @@ export async function loginInstructor(req, res, next) {
     next(err);
   }
 }
-
 // GET /api/instructors
-// Public directory. Deliberately limited fields so the contrast with the
-// leaky /search endpoint below is obvious.
 export async function getDirectory(req, res, next) {
   try {
     const instructors = await Instructor.find()
@@ -72,17 +72,23 @@ export async function getDirectory(req, res, next) {
 // GET /api/instructors/search
 export async function searchInstructors(req, res, next) {
   try {
-    // ⚠️ VULNERABLE (NoSQL injection): the entire query string is used as the
-    // MongoDB filter and full documents (incl. password / apiKey / private
-    // contact info) are returned. Examples of what this allows:
-    //   ?name=Smith                     -> intended, honest use
-    //   ?role[$ne]=instructor           -> operator injection, leaks superadmin
-    //   ?username[$regex]=^admin        -> regex enumeration
-    //   ?$where=this.password.length>10 -> server-side JavaScript execution
-    const filter = req.query;
-    const instructors = await Instructor.find(filter).lean();
+    // 1. Whitelist: Only accept expected string query fields
+    const filter = {};
+    if (typeof req.query.name === 'string') {
+      filter.name = req.query.name;
+    }
+    if (typeof req.query.department === 'string') {
+      filter.department = req.query.department;
+    }
+
+    // 2. Field Projection: Never leak secrets in search results
+    const instructors = await Instructor.find(filter)
+      .select('-password -apiKey -privateEmail -privatePhone')
+      .lean();
+
     res.json({ count: instructors.length, instructors });
   } catch (err) {
     next(err);
   }
 }
+// GET /api/instructors/search
