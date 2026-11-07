@@ -43,15 +43,12 @@ export async function loginInstructor(req, res, next) {
       return res.status(400).json({ message: error.message });
     }
 
-    const instructor = await Instructor.findOne({
-      username: value.username,
-      password: value.password
-    });
+    const instructor = await Instructor.findOne({ username: value.username });
 
-    if (!instructor) {
+    if (!instructor || !(await instructor.comparePassword(value.password))) {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
-    return res.json({ instructor: publicProfile(instructor) });
+        return res.json({ instructor: publicProfile(instructor) });
   } catch (err) {
     next(err);
   }
